@@ -1,0 +1,1010 @@
+---
+title: "covid_1"
+author: "Rodrigo_Hermoza"
+date: "2/26/2024"
+output: html_document
+---
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE150728
+https://www.nature.com/articles/s41591-020-0944-y#data-availability
+
+44 k cells, 7 samples all males, 6 controls.
+
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(ggplot2)
+library(gridExtra)
+library(harmony)
+library(future.apply)
+library(cowplot)
+library(patchwork)
+library("DESeq2")
+library(sctransform)
+library(EpicTools)
+library(grr)
+library(Matrix)
+library(factoextra)
+library(ComplexHeatmap)
+library(circlize)
+library(ggpubr)
+library(data.table)
+library(RColorBrewer)
+#library(rowr)
+library(SingleR)
+library(scater)
+#library(nichenetr)
+library(future)
+library(future.apply)
+```
+
+
+```{r}
+# Nombres de los archivos
+file_list <- c(
+  "GSM4557327_555_1_cell.counts.matrices.rds", "GSM4557328_555_2_cell.counts.matrices.rds", "GSM4557329_556_cell.counts.matrices.rds", "GSM4557330_557_cell.counts.matrices.rds", "GSM4557331_558_cell.counts.matrices.rds", "GSM4557332_559_cell.counts.matrices.rds", "GSM4557333_560_cell.counts.matrices.rds", 
+  "GSM4557333_561_cell.counts.matrices.rds",
+  "GSM4557334_HIP002_cell.counts.matrices.rds",
+  "GSM4557335_HIP015_cell.counts.matrices.rds",
+  "GSM4557336_HIP023_cell.counts.matrices.rds",
+  "GSM4557337_HIP043_cell.counts.matrices.rds",
+  "GSM4557338_HIP044_cell.counts.matrices.rds",
+  "GSM4557339_HIP045_cell.counts.matrices.rds"
+)
+
+# Directorio de destino
+dest_dir <- "/Users/rodrigohermoza/Desktop/UTEC/2024-0/PoliSia/COVID/GSE150728_RAW"
+
+gc()
+# Lista para almacenar los datos (lectura paralela)
+data_list <- future_lapply(file.path(dest_dir, file_list), readRDS)
+gc()
+# Puedes acceder a los conjuntos de datos usando data_list[[1]], data_list[[2]], etc.
+
+#Conseguimos los nombre de los documentos
+
+
+file_list_cleaned <- gsub("_cell.counts.matrices.rds", "", file_list)
+
+for (x in c(1:14)) {
+  name<-file_list_cleaned[x]
+  assign(name, CreateSeuratObject( counts = data_list[[x]], min.cells = 10))
+}
+
+merged <- merge(
+  `GSM4557327_555_1`, 
+  y = list(
+    `GSM4557328_555_2`, 
+    `GSM4557329_556`, 
+    `GSM4557330_557`, 
+    `GSM4557331_558`, 
+    `GSM4557332_559`,
+    `GSM4557333_560`,
+    `GSM4557333_561`,
+    `GSM4557334_HIP002`,
+    `GSM4557335_HIP015`,
+    `GSM4557336_HIP023`,
+    `GSM4557337_HIP043`,
+    `GSM4557338_HIP044`,
+    `GSM4557339_HIP045`
+  ),
+  add.cell.ids = c(
+    "C1A", 
+    "C1B", 
+    "C2", 
+    "C3", 
+    "C4", 
+    "C5",
+    "C6",
+    "C7",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6"
+  ),
+  project = "COVID"
+)
+
+rm(`GSM4557328_555_2`, 
+    `GSM4557329_556`, 
+    `GSM4557330_557`, 
+    `GSM4557331_558`, 
+    `GSM4557332_559`, `GSM4557333_560`,
+    `GSM4557333_561`,
+    `GSM4557334_HIP002`,
+    `GSM4557335_HIP015`,
+    `GSM4557336_HIP023`,
+    `GSM4557337_HIP043`,
+    `GSM4557338_HIP044`,
+    `GSM4557339_HIP045`,
+   `GSM4557327_555_1`)
+
+
+merged$Sample <- rownames(merged@meta.data)
+
+merged@meta.data <- separate(merged@meta.data, col = "Sample", into = c("Patient", "Barcode"), sep = "_")
+
+merged <- PercentageFeatureSet(merged, pattern = "^MT-", col.name = "percent.mt")
+
+merged <- subset(merged, subset = nFeature_RNA > 100 & percent.mt <25 & nCount_RNA > 50)
+
+list <- SplitObject(object = merged, split.by = "Patient")
+for (i in 1:length(list)){
+  list[[i]] <- SCTransform(list[[i]], verbose = F)
+}
+
+```
+
+```{r}
+path = "/Users/rodrigohermoza/Desktop/UTEC/2024-0/PoliSia/COVID/GSE150728_RAW/"
+cm.list = paste0(path, list.files(pattern = "*.matrices.rds", path = path))
+cm.files <- lapply(cm.list, readRDS)
+names(cm.files) <- sub(path,"",
+                       sub("\\_cell.counts.matrices.rds", "", cm.list))
+cm.pp <- mapply(EpicPreHS, cm.files, orig.ident = names(cm.files), SIMPLIFY = F)
+covid_combined.emat <- mergeCM(cm.pp, type = "emat")
+covid_combined.nmat <- mergeCM(cm.pp, type = "nmat")
+```
+
+```{r}
+covid_combined <- CreateSeuratObject(counts = covid_combined.emat, min.cells = 10, names.field = 1, names.delim = "\\.")
+covid_combined <- PercentageFeatureSet(covid_combined, pattern = "^MT-", col.name = "percent.mt")
+covid_combined <- PercentageFeatureSet(covid_combined, pattern = "^RPS", col.name = "percent.rps")
+covid_combined <- PercentageFeatureSet(covid_combined, pattern = "^RPL", col.name = "percent.rpl")
+covid_combined <- PercentageFeatureSet(covid_combined, pattern = "^RNA\\d8S5", col.name = "percent.rrna")
+covid_combined <- SCTransform(covid_combined, vars.to.regress = c("percent.mt", "percent.rps", "percent.rpl", "percent.rrna", "nCount_RNA", "nFeature_RNA"), verbose = FALSE, return.only.var.genes = TRUE) #expect "iteration limit reached" warning unless suppressed per https://github.com/satijalab/seurat/issues/1426
+
+covid_combined <- RunPCA(covid_combined, verbose = FALSE)
+covid_combined <- RunUMAP(covid_combined, dims = 1:50, verbose = FALSE)
+covid_combined <- FindNeighbors(covid_combined, dims = 1:50, verbose = FALSE)
+covid_combined <- FindClusters(covid_combined, resolution = 1, verbose = FALSE)
+DimPlot(covid_combined, label = TRUE)
+```
+
+
+```{r}
+covid_metadata <- read_csv("https://raw.githubusercontent.com/ajwilk/2020_Wilk_COVID/master/code/COVID-19_metadata_repo.csv")
+#NOTE: ensure that rownames of covid_metadata match orig.ident fields in object. This is impacted by the naming of the count matrices submitted to GEO
+seurat_metadata <- covid_combined@meta.data
+seurat_metadata <- seurat_metadata[,!(colnames(seurat_metadata)) %in% 
+                                     setdiff(colnames(covid_metadata), "orig.ident")]
+metadata_combined <- merge(seurat_metadata, covid_metadata, by = "orig.ident")
+rownames(metadata_combined) <- rownames(covid_combined@meta.data)
+
+covid_combined@meta.data <- metadata_combined
+```
+
+Codigo innecesario
+```{r}
+sars.names <- c("MN994467.1", "MN994468.1", "MT027062.1", "MT027063.1", "MT027064.1", "MT044258.1", "MT106052.1", "MT106053.1", "MT118835.1", "MT192765.1")
+covid.pos <- covid_combined.emat[grep(paste(sars.names,collapse="|"), rownames(covid_combined.emat)),]
+covid.pos.cells <- names(covid.pos[covid.pos !=0])
+length(covid.pos.cells) #no SARS-CoV-2 reads detected in dataset
+```
+
+```{r}
+covid_combined.markers <- FindAllMarkers(covid_combined, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+covid_combined.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+Quality control clusters
+
+no tengo ni idea de por qué dice que el cluster 12 y 3 son malos
+```{r}
+crap.markers <- FindMarkers(covid_combined, ident.1 = "3")
+crap.markers[order(-crap.markers$avg_log2FC),]
+```
+
+```{r}
+crap2.markers <- FindMarkers(covid_combined, ident.1 = "12")
+crap2.markers[order(-crap2.markers$avg_log2FC),]
+```
+
+SingleR: identificador de markers para denominar clusters
+
+```{r}
+ref <- HumanPrimaryCellAtlasData()
+common <- intersect(rownames(ref), rownames(covid_combined.emat))
+combined.emat.singler <- covid_combined.emat[common,]
+ref <- ref[common,]
+combined.emat.singler.sce <- SingleCellExperiment(assays = list(counts = combined.emat.singler))
+combined.emat.singler.sce <- logNormCounts(combined.emat.singler.sce)
+singler.pred <- SingleR(test = combined.emat.singler.sce@assays@data@listData$logcounts, ref = ref, labels = ref$label.main)
+table(singler.pred$labels)
+```
+
+```{r}
+plotScoreHeatmap(singler.pred, clusters = covid_combined@meta.data$orig.ident)
+plotScoreHeatmap(singler.pred, clusters = covid_combined@meta.data$seurat_clusters)
+```
+
+```{r}
+singler.results <- merge(data.frame(cell = rownames(singler.pred), singler = singler.pred$labels), 
+                         data.frame(cell = rownames(covid_combined@meta.data), 
+                                    cluster = covid_combined@meta.data$seurat_clusters), 
+                         by = "cell", 
+                         all.y = FALSE)
+singler.results$cell <- NULL
+singler.results$count <- 1
+singler.results <- aggregate(count ~ ., singler.results, FUN = sum)
+singler.final <- singler.results %>% group_by(cluster) %>% top_n(n = 1, wt = count)
+singler.final
+covid_combined$singler <- singler.pred$labels
+DimPlot(covid_combined, group.by = "singler", label = T)
+```
+
+El siguiente paso, no tengo ni idea del porque hace el analisis de nuevo ni porque elimina los clusters 3 y 12. Para investigar
+
+```{r}
+covid_combined.nc <- subset(covid_combined, idents = setdiff(unique(covid_combined$seurat_clusters), c("3", "12")))
+covid_combined.nc <- RunPCA(covid_combined.nc, verbose = FALSE)
+covid_combined.nc <- RunUMAP(covid_combined.nc, dims = 1:50, verbose = FALSE)
+covid_combined.nc <- FindNeighbors(covid_combined.nc, dims = 1:50, verbose = FALSE)
+covid_combined.nc <- FindClusters(covid_combined.nc, resolution = 1, verbose = FALSE)
+DimPlot(covid_combined.nc, label = TRUE)
+DimPlot(covid_combined.nc, group.by = "singler", label = T)
+```
+
+```{r}
+singler.results <- merge(data.frame(cell = rownames(singler.pred), singler = singler.pred$labels), 
+                         data.frame(cell = rownames(covid_combined.nc@meta.data), 
+                                    cluster = covid_combined.nc@meta.data$seurat_clusters), 
+                         by = "cell", 
+                         all.y = FALSE)
+singler.results$cell <- NULL
+singler.results$count <- 1
+singler.results <- aggregate(count ~ ., singler.results, FUN = sum)
+singler.final <- singler.results %>% group_by(cluster) %>% top_n(n = 1, wt = count)
+singler.final
+```
+
+```{r}
+covid_combined.nc.markers <- FindAllMarkers(covid_combined.nc, only.pos = T)
+covid_combined.nc.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+```
+
+Aqui hay un error, probablemente no esta actualizado a las nuevas capacidades y limitaciones de Seurat 4
+```{r}
+DotPlot(Seurat:::subset.Seurat(covid_combined.nc, 
+                               idents = unlist(lapply(singler.final[singler.final$singler=="T_cells","cluster"],
+                                                      as.character))), 
+        features = c("CD4", "PRF1", "GZMB", "GZMA", "CD8A", "RORC", "EOMES", "TBX21"))
+DotPlot(Seurat:::subset.Seurat(covid_combined.nc, 
+                               idents = unlist(lapply(singler.final[singler.final$singler=="T_cells","cluster"],
+                                                      as.character))), 
+        features = c("PTK7", "PECAM1", "ITGAE", "CD44", "CR2", "IL2RA", "FAS", "IL2RB"))
+DotPlot(Seurat:::subset.Seurat(covid_combined.nc, 
+                               idents = unlist(lapply(singler.final[singler.final$singler=="T_cells","cluster"],
+                                                      as.character))), 
+        features = c("SELL", "CCR7", "CD44", "CD28", "CD27", "IL7R", "CXCR3", "ITGAL", "CD58"))
+DotPlot(Seurat:::subset.Seurat(covid_combined.nc, 
+                               idents = unlist(lapply(singler.final[singler.final$singler=="T_cells","cluster"],
+                                                      as.character))), 
+        features = c("TRDC", "TRGC1", "TRGC2", "KLRB1", "KLRK1"))
+```
+
+```{r}
+# Filtrar las células T
+T_cells <- subset(covid_combined.nc, idents = unlist(lapply(singler.final[singler.final$singler == "T_cells", "cluster"], as.character)))
+
+# Crear DotPlots con diferentes conjuntos de características
+DotPlot(T_cells, features = c("CD4", "PRF1", "GZMB", "GZMA", "CD8A", "RORC", "EOMES", "TBX21"))
+DotPlot(T_cells, features = c("PTK7", "PECAM1", "ITGAE", "CD44", "CR2", "IL2RA", "FAS", "IL2RB"))
+DotPlot(T_cells, features = c("SELL", "CCR7", "CD44", "CD28", "CD27", "IL7R", "CXCR3", "ITGAL", "CD58"))
+DotPlot(T_cells, features = c("TRDC", "TRGC1", "TRGC2", "KLRB1", "KLRK1"))
+
+# Filtrar las células monocito
+monocytes <- subset(covid_combined.nc, idents = unlist(lapply(singler.final[singler.final$singler == "Monocyte", "cluster"], as.character)))
+
+# Crear DotPlots para células monocito con las características especificadas
+DotPlot(monocytes, features = c("CD14", "LYZ", "FCGR3A", "IL1B", "IDO1", "FCER1A", "FLT3", "IL3RA", "NRP1"))
+
+# Filtrar las células B
+B_cells <- subset(covid_combined.nc, idents = unlist(lapply(singler.final[singler.final$singler == "B_cell", "cluster"], as.character)))
+
+# Crear DotPlots para células B con las características especificadas
+DotPlot(B_cells, features = c("MME", "CD22", "FCER2", "CD38", "CD44", "CD27", "SDC1"))
+
+#Crear para NK cells
+
+#Idents(covid_combined.nc) <- "seurat_clusters"
+
+NK_cells <- subset(covid_combined.nc, idents = unlist(lapply(singler.final[singler.final$singler == "NK_cell", "cluster"], as.character)))
+
+
+```
+
+Analisis de mi parte
+```{r}
+FeaturePlot(covid_combined.nc, features = "ST8SIA4")
+FeaturePlot(covid_combined.nc, features = "ST8SIA2")
+FeaturePlot(covid_combined.nc, features = "ST8SIA6")
+FeaturePlot(covid_combined.nc, features = "NCAM1")
+FeaturePlot(covid_combined.nc, features = "CD3G")
+FeaturePlot(covid_combined.nc, features = "CD3D")
+FeaturePlot(covid_combined.nc, features = "CD3E")
+# Grafico para muestras con estado "Healthy"
+FeaturePlot(subset(covid_combined.nc, idents = "Healthy"), features = "ST8SIA4")
+
+# Grafico para muestras con estado "COVID"
+FeaturePlot(subset(covid_combined.nc, idents = "COVID"), features = "ST8SIA4")
+
+FeatureScatter(subset(covid_combined.nc, idents = "Healthy"), feature1 = "ST8SIA4", feature2 = "CD4", slot = "data", smooth = T)
+FeatureScatter(subset(covid_combined.nc, idents = "COVID"), feature1 = "ST8SIA4", feature2 = "CD4", slot = "data", smooth = T)
+FeatureScatter(covid_combined.nc, feature1 = "ST8SIA4", feature2 = "CCR7", slot = "data", smooth = T)
+FeatureScatter(covid_combined.nc, feature1 = "CD3G", feature2 = "CD3D", slot = "scale.data", smooth = T)
+
+```
+
+Numero de celulas expresando ST8SIA4 y Porcentaje
+
+```{r}
+#4483 celulas tienen ST8SIA4
+sum(GetAssayData(object = covid_combined.nc, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 10%
+sum(GetAssayData(object = covid_combined.nc, slot = "data")["ST8SIA4",]>0)/nrow(covid_combined.nc@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(covid_combined.nc, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(covid_combined.nc, idents = "Healthy")@meta.data) #0.07187809
+
+sum(GetAssayData(object = subset(covid_combined.nc, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(covid_combined.nc, idents = "COVID")@meta.data)#0.1223854
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+healthy <- sum(GetAssayData(object = subset(covid_combined.nc, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(covid_combined.nc, idents = "Healthy")@meta.data)
+
+#All
+
+all<-sum(GetAssayData(object = covid_combined.nc, slot = "data")["ST8SIA4",]>0)/nrow(covid_combined.nc@meta.data)
+
+#Covid
+
+covid<-sum(GetAssayData(object = subset(covid_combined.nc, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(covid_combined.nc, idents = "COVID")@meta.data)
+
+#ICU
+
+ICU<-sum(GetAssayData(object = covid_combined.nc, cells = covid_combined.nc[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(covid_combined.nc[["Admission"]] == "ICU")
+
+#ARDS
+
+ARDS<-sum(GetAssayData(object = covid_combined.nc, cells = covid_combined.nc[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(covid_combined.nc[["Ventilated"]] == "ARDS")
+
+```
+
+
+sum(GetAssayData(object = covid_combined.nc, cells = covid_combined.nc[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(covid_combined.nc[["Ventilated"]] == "ARDS")
+
+29% DE CELULAS CON ARDS TIENEN ST8SIA4
+
+sum(GetAssayData(object = covid_combined.nc, cells = covid_combined.nc[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(covid_combined.nc[["Admission"]] == "ICU")
+
+20.4% DE CELULAS DE ICU TIENEN ST8SIA4
+
+
+
+```{r}
+# Valores
+vec <- c(healthy, all, covid, ICU, ARDS)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(vec, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(vec) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = vec, label = paste0(round(vec), "%"), pos = 3, col = "black", cex = 1)
+
+```
+
+```{r}
+#Idents(T_cells) <- "Status"
+
+#Veremos el mapo de T cells para enfermos y sanos de ST8SIA4
+FeaturePlot(subset(T_cells, idents = "Healthy"), features = "ST8SIA4")
+
+FeaturePlot(subset(T_cells, idents = "COVID"), features = "ST8SIA4")
+
+```
+Estadisticas de T cells
+```{r}
+#1147 celulas tienen ST8SIA4
+sum(GetAssayData(object = T_cells, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 7%
+sum(GetAssayData(object = T_cells, slot = "data")["ST8SIA4",]>0)/nrow(T_cells@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(T_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(T_cells, idents = "Healthy")@meta.data) #0.05386243
+
+sum(GetAssayData(object = subset(T_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(T_cells, idents = "COVID")@meta.data)#0.09392021
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+healthyt <- sum(GetAssayData(object = subset(T_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(T_cells, idents = "Healthy")@meta.data)
+
+#All
+
+allt<-sum(GetAssayData(object = T_cells, slot = "data")["ST8SIA4",]>0)/nrow(T_cells@meta.data)
+
+#Covid
+
+covidt<-sum(GetAssayData(object = subset(T_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(T_cells, idents = "COVID")@meta.data)
+
+#ICU
+
+ICUt<-sum(GetAssayData(object = T_cells, cells = T_cells[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(T_cells[["Admission"]] == "ICU")
+
+#ARDS
+
+ARDSt<-sum(GetAssayData(object = T_cells, cells = T_cells[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(T_cells[["Ventilated"]] == "ARDS")
+```
+
+```{r}
+# Valores
+vect <- c(healthyt, allt, covidt, ICUt, ARDSt)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(vect, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of T cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(vect) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across T cells of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = vect, label = paste0(round(vect), "%"), pos = 3, col = "black", cex = 1)
+```
+
+Vamos a tener que hacerlo para naive cells, si es que no hya cambio y es relativamente bajo, entonces estamos bien
+
+```{r}
+#Idents(T_cells) <- "seurat_clusters"
+DotPlot(T_cells, features = c("CD3G", "CD8A", "CD8B", "SELL", "LEF1", "CCR7", "IL7R", "PTPRC"))
+DotPlot(T_cells, features = c("PTK7", "PECAM1", "ITGAE", "CD44", "CR2", "IL2RA", "FAS", "IL2RB"))
+DotPlot(T_cells, features = c("SELL", "CCR7", "CD44", "CD28", "CD27", "IL7R", "CXCR3", "ITGAL", "CD58"))
+DotPlot(T_cells, features = c("TRDC", "TRGC1", "TRGC2", "KLRB1", "KLRK1"))
+
+#Asegurado que cluster 0 es naive o tiene algunos naive
+```
+
+```{r}
+#Posibles naive, aunque tengo mis sospechas de que no son
+
+p_naive <- subset(T_cells, idents = 0)
+
+#142 celulas tienen ST8SIA4
+sum(GetAssayData(object = p_naive, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 3%
+sum(GetAssayData(object = p_naive, slot = "data")["ST8SIA4",]>0)/nrow(p_naive@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(p_naive, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(p_naive, idents = "Healthy")@meta.data) #0.03216612 y 79 celulas
+
+sum(GetAssayData(object = subset(p_naive, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(p_naive, idents = "COVID")@meta.data)#0.04133858 y 63 celulas
+
+
+Idents(p_naive) <- "Status"
+#Ahora averiguamos sus stats
+
+n_healthyt <- sum(GetAssayData(object = subset(p_naive, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(p_naive, idents = "Healthy")@meta.data)
+
+#All
+
+n_allt<-sum(GetAssayData(object = p_naive, slot = "data")["ST8SIA4",]>0)/nrow(p_naive@meta.data)
+
+#Covid
+
+n_covidt<-sum(GetAssayData(object = subset(p_naive, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(p_naive, idents = "COVID")@meta.data)
+
+#ICU
+
+n_ICUt<-sum(GetAssayData(object = p_naive, cells = p_naive[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(p_naive[["Admission"]] == "ICU")
+
+#ARDS
+
+n_ARDSt<-sum(GetAssayData(object = p_naive, cells = p_naive[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(p_naive[["Ventilated"]] == "ARDS")
+```
+
+```{r}
+# Valores
+n_vect <- c(n_healthyt, n_allt, n_covidt, n_ICUt, n_ARDSt)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(n_vect, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of naive T cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(n_vect) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across naive T cells of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = n_vect, label = paste0(round(n_vect), "%"), pos = 3, col = "black", cex = 1)
+```
+
+Haria un treemap pero el codigo se ve complicado asi que solo haremos un piechart
+
+Las alternativas son donut chart, waffle chart. Me voy por Waffle. 
+
+Lamentablemente waffle no trabaja muy bien con numeros muy grandes
+```{r}
+library(gridExtra)
+# Datos de ejemplo (reemplaza esto con tus propios datos)
+total_healthy <- sum(covid_combined.nc$Status == "Healthy")
+total_covid <- sum(covid_combined.nc$Status == "COVID")
+total_nonicu <- total_covid - sum(covid_combined.nc$Admission == "ICU")
+total_icu <- sum(covid_combined.nc$Admission == "ICU")
+total_nonards <- total_icu - sum(covid_combined.nc$Ventilated == "ARDS")
+total_ards <- sum(covid_combined.nc$Ventilated == "ARDS")
+
+# Crear un dataframe con los datos
+df_healthy_covid <- data.frame(
+  Grupo = c("Healthy", "COVID"),
+  Valor = c(total_healthy, total_covid)
+)
+df_nonicu_icu <- data.frame(
+  Grupo = c("NonICU", "ICU"),
+  Valor = c(total_nonicu, total_icu)
+)
+df_nonards_ards <- data.frame(
+  Grupo = c("NonARDS", "ARDS"),
+  Valor = c(total_nonards, total_ards)
+)
+
+# Calcular el total
+total_healthy_covid <- sum(df_healthy_covid$Valor)
+total_nonicu_icu <- sum(df_nonicu_icu$Valor)
+total_nonards_ards <- sum(df_nonards_ards$Valor)
+
+# Calcular el porcentaje
+df_healthy_covid$Porcentaje <- df_healthy_covid$Valor / (total_healthy + total_covid) * 100
+df_nonicu_icu$Porcentaje <- df_nonicu_icu$Valor / total_covid * 100
+df_nonards_ards$Porcentaje <- df_nonards_ards$Valor / total_icu * 100
+
+library(ggplot2)
+
+# Crear los gráficos de dona
+p1 <- ggplot(df_healthy_covid, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "Healthy vs COVID", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(df_nonicu_icu, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonICU vs ICU", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p3 <- ggplot(df_nonards_ards, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonARDS vs ARDS", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+# Mostrar los gráficos
+grid.arrange(p1 + guides(fill=guide_legend(title="Grupo")),
+             p2 + guides(fill=guide_legend(title="Grupo")),
+             p3 + guides(fill=guide_legend(title="Grupo")),
+             nrow = 1)
+
+
+```
+
+```{r}
+total_healthy <- sum(T_cells$Status == "Healthy")
+total_covid <- sum(T_cells$Status == "COVID")
+total_nonicu <- total_covid - sum(T_cells$Admission == "ICU")
+total_icu <- sum(T_cells$Admission == "ICU")
+total_nonards <- total_icu - sum(T_cells$Ventilated == "ARDS")
+total_ards <- sum(T_cells$Ventilated == "ARDS")
+
+# Crear un dataframe con los datos
+df_healthy_covid <- data.frame(
+  Grupo = c("Healthy", "COVID"),
+  Valor = c(total_healthy, total_covid)
+)
+df_nonicu_icu <- data.frame(
+  Grupo = c("NonICU", "ICU"),
+  Valor = c(total_nonicu, total_icu)
+)
+df_nonards_ards <- data.frame(
+  Grupo = c("NonARDS", "ARDS"),
+  Valor = c(total_nonards, total_ards)
+)
+
+# Calcular el total
+total_healthy_covid <- sum(df_healthy_covid$Valor)
+total_nonicu_icu <- sum(df_nonicu_icu$Valor)
+total_nonards_ards <- sum(df_nonards_ards$Valor)
+
+# Calcular el porcentaje
+df_healthy_covid$Porcentaje <- df_healthy_covid$Valor / (total_healthy + total_covid) * 100
+df_nonicu_icu$Porcentaje <- df_nonicu_icu$Valor / total_covid * 100
+df_nonards_ards$Porcentaje <- df_nonards_ards$Valor / total_icu * 100
+
+library(ggplot2)
+
+# Crear los gráficos de dona
+p1 <- ggplot(df_healthy_covid, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "Healthy vs COVID", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(df_nonicu_icu, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonICU vs ICU", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p3 <- ggplot(df_nonards_ards, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonARDS vs ARDS", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+# Mostrar los gráficos
+grid.arrange(p1 + guides(fill=guide_legend(title="Grupo")),
+             p2 + guides(fill=guide_legend(title="Grupo")),
+             p3 + guides(fill=guide_legend(title="Grupo")),
+             nrow = 1)
+
+```
+
+
+```{r}
+total_healthy <- sum(p_naive$Status == "Healthy")
+total_covid <- sum(p_naive$Status == "COVID")
+total_nonicu <- total_covid - sum(p_naive$Admission == "ICU")
+total_icu <- sum(p_naive$Admission == "ICU")
+total_nonards <- total_icu - sum(p_naive$Ventilated == "ARDS")
+total_ards <- sum(p_naive$Ventilated == "ARDS")
+
+# Crear un dataframe con los datos
+df_healthy_covid <- data.frame(
+  Grupo = c("Healthy", "COVID"),
+  Valor = c(total_healthy, total_covid)
+)
+df_nonicu_icu <- data.frame(
+  Grupo = c("NonICU", "ICU"),
+  Valor = c(total_nonicu, total_icu)
+)
+df_nonards_ards <- data.frame(
+  Grupo = c("NonARDS", "ARDS"),
+  Valor = c(total_nonards, total_ards)
+)
+
+# Calcular el total
+total_healthy_covid <- sum(df_healthy_covid$Valor)
+total_nonicu_icu <- sum(df_nonicu_icu$Valor)
+total_nonards_ards <- sum(df_nonards_ards$Valor)
+
+# Calcular el porcentaje
+df_healthy_covid$Porcentaje <- df_healthy_covid$Valor / (total_healthy + total_covid) * 100
+df_nonicu_icu$Porcentaje <- df_nonicu_icu$Valor / total_covid * 100
+df_nonards_ards$Porcentaje <- df_nonards_ards$Valor / total_icu * 100
+
+library(ggplot2)
+
+# Crear los gráficos de dona
+p1 <- ggplot(df_healthy_covid, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "Healthy vs COVID", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p2 <- ggplot(df_nonicu_icu, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonICU vs ICU", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+p3 <- ggplot(df_nonards_ards, aes(x = "", y = Porcentaje, fill = Grupo)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  theme_void() +
+  labs(title = "NonARDS vs ARDS", fill = "Grupo") +
+  geom_text(aes(label = paste0(Valor, " (", round(Porcentaje, 1), "%)")), position = position_stack(vjust = 0.5), color = "white") +
+  theme(legend.position = "bottom")
+
+# Mostrar los gráficos
+grid.arrange(p1 + guides(fill=guide_legend(title="Grupo")),
+             p2 + guides(fill=guide_legend(title="Grupo")),
+             p3 + guides(fill=guide_legend(title="Grupo")),
+             nrow = 1)
+
+```
+```{r}
+AverageExpression(p_naive, group.by =  "Ventilated", features = "ST8SIA4", slot = "data")
+```
+
+
+AHORA HAREMOS TODAS ESTAS GRAFICAS EN B CELLS, NK CELLS Y DC
+
+Estadisticas de B cells
+```{r}
+
+Idents(B_cells) <- "Status"
+#524 celulas tienen ST8SIA4
+sum(GetAssayData(object = B_cells, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 8%
+sum(GetAssayData(object = B_cells, slot = "data")["ST8SIA4",]>0)/nrow(B_cells@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(B_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(B_cells, idents = "Healthy")@meta.data) #0.06918919
+
+sum(GetAssayData(object = subset(B_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(B_cells, idents = "COVID")@meta.data)#0.09782609
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+bhealthy <- (sum(GetAssayData(object = subset(B_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(B_cells, idents = "Healthy")@meta.data))*100
+
+#All
+
+ball<-(sum(GetAssayData(object = B_cells, slot = "data")["ST8SIA4",]>0)/nrow(B_cells@meta.data))*100
+
+#Covid
+
+bcovid<-(sum(GetAssayData(object = subset(B_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(B_cells, idents = "COVID")@meta.data))*100
+
+#ICU
+
+bICU<-(sum(GetAssayData(object = B_cells, cells = B_cells[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(B_cells[["Admission"]] == "ICU"))*100
+
+#ARDS
+
+bARDS<-(sum(GetAssayData(object = B_cells, cells = B_cells[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(B_cells[["Ventilated"]] == "ARDS"))*100
+```
+
+```{r}
+# Valores
+bvec <- c(bhealthy, ball, bcovid, bICU, bARDS)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(bvec, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of B cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(bvec) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 acrossB cells of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = bvec, label = paste0(round(bvec), "%"), pos = 3, col = "black", cex = 1)
+```
+
+Trataré de encontrar naive B cells y hare los graficos
+
+```{r}
+Idents(B_cells) <- "seurat_clusters"
+
+DotPlot(B_cells, features = c("CD79A", "MS4A1", "TCL1A", "IGHD", "LEF1", "CCR7", "IL7R", "PTPRC"))
+```
+
+```{r}
+b_naive <- subset(B_cells, idents = 2)
+```
+
+```{r}
+
+Idents(b_naive) <- "Status"
+#524 celulas tienen ST8SIA4
+sum(GetAssayData(object = b_naive, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 8%
+sum(GetAssayData(object = b_naive, slot = "data")["ST8SIA4",]>0)/nrow(b_naive@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(b_naive, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(b_naive, idents = "Healthy")@meta.data) #0.06918919
+
+sum(GetAssayData(object = subset(b_naive, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(b_naive, idents = "COVID")@meta.data)#0.09782609
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+bhealthy <- (sum(GetAssayData(object = subset(b_naive, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(b_naive, idents = "Healthy")@meta.data))*100
+
+#All
+
+ball<-(sum(GetAssayData(object = b_naive, slot = "data")["ST8SIA4",]>0)/nrow(b_naive@meta.data))*100
+
+#Covid
+
+bcovid<-(sum(GetAssayData(object = subset(b_naive, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(b_naive, idents = "COVID")@meta.data))*100
+
+#ICU
+
+bICU<-(sum(GetAssayData(object = b_naive, cells = b_naive[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(b_naive[["Admission"]] == "ICU"))*100
+
+#ARDS
+
+bARDS<-(sum(GetAssayData(object = b_naive, cells = b_naive[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(b_naive[["Ventilated"]] == "ARDS"))*100
+```
+
+```{r}
+# Valores
+bvec <- c(bhealthy, ball, bcovid, bICU, bARDS)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(bvec, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of naive B cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(bvec) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across naive B cells of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = bvec, label = paste0(round(bvec), "%"), pos = 3, col = "black", cex = 1)
+```
+
+Estadisticas de NK cells
+
+```{r}
+Idents(NK_cells) <- "Status"
+#524 celulas tienen ST8SIA4
+sum(GetAssayData(object = NK_cells, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 8%
+sum(GetAssayData(object = NK_cells, slot = "data")["ST8SIA4",]>0)/nrow(B_cells@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(NK_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(NK_cells, idents = "Healthy")@meta.data) #0.06918919
+
+sum(GetAssayData(object = subset(NK_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(NK_cells, idents = "COVID")@meta.data)#0.09782609
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+Nhealthy <- (sum(GetAssayData(object = subset(NK_cells, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(NK_cells, idents = "Healthy")@meta.data))*100
+
+#All
+
+Nall<-(sum(GetAssayData(object = NK_cells, slot = "data")["ST8SIA4",]>0)/nrow(NK_cells@meta.data))*100
+
+#Covid
+
+Ncovid<-(sum(GetAssayData(object = subset(NK_cells, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(NK_cells, idents = "COVID")@meta.data))*100
+
+#ICU
+
+NICU<-(sum(GetAssayData(object = NK_cells, cells = NK_cells[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(NK_cells[["Admission"]] == "ICU"))*100
+
+#ARDS
+
+NARDS<-(sum(GetAssayData(object = NK_cells, cells = NK_cells[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(NK_cells[["Ventilated"]] == "ARDS"))*100
+```
+
+```{r}
+# Valores
+Nvec <- c(Nhealthy, Nall, Ncovid, NICU, NARDS)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(Nvec, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of NK cells expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(Nvec) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across NK cells of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = Nvec, label = paste0(round(Nvec), "%"), pos = 3, col = "black", cex = 1)
+```
+
+```{r}
+AverageExpression(NK_cells, group.by =  "Status", features = "ST8SIA4", slot = "data")
+```
+
+Estadisticas de Monocytes
+
+```{r}
+Idents(monocytes) <- "Status"
+#524 celulas tienen ST8SIA4
+sum(GetAssayData(object = monocytes, slot = "data")["ST8SIA4",]>0)
+#Alrededor del 8%
+sum(GetAssayData(object = monocytes, slot = "data")["ST8SIA4",]>0)/nrow(B_cells@meta.data)
+
+#Intentaremos con los apcientes de Covid y los pacientes sanos
+sum(GetAssayData(object = subset(monocytes, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(monocytes, idents = "Healthy")@meta.data) #0.06918919
+
+sum(GetAssayData(object = subset(monocytes, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(monocytes, idents = "COVID")@meta.data)#0.09782609
+
+#Definamos los valores
+
+#Porcentaje de células que expresan ST8SIA4
+
+#Healthy
+
+Mhealthy <- (sum(GetAssayData(object = subset(monocytes, idents = "Healthy"), slot = "data")["ST8SIA4",]>0)/nrow(subset(monocytes, idents = "Healthy")@meta.data))*100
+
+#All
+
+Mall<-(sum(GetAssayData(object = monocytes, slot = "data")["ST8SIA4",]>0)/nrow(monocytes@meta.data))*100
+
+#Covid
+
+Mcovid<-(sum(GetAssayData(object = subset(monocytes, idents = "COVID"), slot = "data")["ST8SIA4",]>0)/nrow(subset(monocytes, idents = "COVID")@meta.data))*100
+
+#ICU
+
+MICU<-(sum(GetAssayData(object = monocytes, cells = monocytes[["Admission"]] == "ICU", slot = "data")["ST8SIA4",] > 0) / sum(monocytes[["Admission"]] == "ICU"))*100
+
+#ARDS
+
+MARDS<-(sum(GetAssayData(object = monocytes, cells = monocytes[["Ventilated"]] == "ARDS", slot = "data")["ST8SIA4",] > 0) / sum(monocytes[["Ventilated"]] == "ARDS"))*100
+```
+
+```{r}
+# Valores
+Mvec <- c(Mhealthy, Mall, Mcovid, MICU, MARDS)
+
+# Colores personalizados
+col <- c("darkgreen", "skyblue", "orange", "red", "purple")
+
+# Gráfico de barras
+barplot(Mvec, 
+        names.arg = c("Healthy", "All", "COVID", "ICU", "ARDS"), 
+        ylab = "Percentage of monocytes expressing ST8SIA4",
+        col = col,
+        ylim = c(0, max(Mvec) * 1.2),  # Ajustar el límite y para evitar superposiciones de texto
+        main = "Expression of ST8SIA4 across monocytes of subjects")  # Título del gráfico
+
+# Agregar valores encima de las barras
+text(x = 1:5, y = Mvec, label = paste0(round(Mvec), "%"), pos = 3, col = "black", cex = 1)
+```
+```{r}
+AverageExpression(monocytes, group.by =  "Ventilated", features = "ST8SIA4", slot = "data")
+```
+
